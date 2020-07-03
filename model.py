@@ -134,7 +134,7 @@ class LSTM_single(nn.Module):
         # scene shape = num_peds, timestamps, data_dim
         lstm_out, _ = self.node_future_encoder(scene) # lstm_out shape num_peds, timestamps ,  2*hidden_dim
         distr, _ = self.edge_encoder(scene)  # shape num_peds, timestamps ,  2*hidden_dim
-        tag_space = self.hidden2tag(lstm_out + lstm_out)
+        tag_space = self.hidden2tag(lstm_out + distr)
 
         return tag_space[:, -1:, :]
 
@@ -146,32 +146,76 @@ class LSTM_single_with_emb(nn.Module):
         super(LSTM_single_with_emb, self).__init__()
         self.num_pred = num_pred
         self.input_dim = input_dim
-        self.inp_emb = nn.Linear(in_features=2*8, out_features=input_dim)
+        self.inp_emb = nn.Linear(in_features=2, out_features=input_dim)
         self.current_inp_emb = nn.Linear(in_features=2, out_features=input_dim)
         self.node_future_encoder = nn.LSTM(input_size=input_dim,
-                              hidden_size=hidden_dim,
-                              bidirectional=True,
-                              batch_first=True)
+                                           hidden_size=hidden_dim,
+                                           num_layers=3,
+                                           bidirectional=True,
+                                           batch_first=True,
+                                           dropout=0.5)
 
         self.edge_encoder = nn.LSTM(input_size=input_dim,
                                   hidden_size=hidden_dim,
+                                  num_layers=3,
                                   bidirectional=True,
-                                  batch_first=True)
-
+                                  batch_first=True,
+                                  dropout=0.5)
+        self.hidden_dim = hidden_dim
         # The linear layer that maps from hidden state space to tag space
-        self.hidden2tag = nn.Linear(2*hidden_dim, tagset_size)
+        self.hidden2tag = nn.Linear(18*hidden_dim, tagset_size)
 
     def forward(self, scene):
-        inp = scene.reshape(scene.shape[0], -1)
+        inp = scene
         embedded = F.relu(self.inp_emb(inp).reshape(scene.shape[0], -1, self.input_dim))
         # scene shape = num_peds, timestamps, data_dim
         lstm_out, _ = self.node_future_encoder(embedded)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
         current = scene[:, -1, :]
         current_emb = F.relu(self.current_inp_emb(current))
         distr, _ = self.edge_encoder(current_emb.unsqueeze(1))  # shape num_peds, timestamps ,  2*hidden_dim
-        tag_space = self.hidden2tag(lstm_out[:, -1, :] + lstm_out)
+        catted = torch.cat((lstm_out, distr), dim=1).reshape(-1, 18 * self.hidden_dim)
+        tag_space = self.hidden2tag(catted).unsqueeze(1)
 
-        return tag_space[:, -1:, :]
+        return tag_space
+
+
+class LSTM_delta(nn.Module):
+
+    def __init__(self, hidden_dim, input_dim, tagset_size, num_pred=12):
+        super(LSTM_delta, self).__init__()
+        self.num_pred = num_pred
+        self.input_dim = input_dim
+        self.inp_emb = nn.Linear(in_features=2, out_features=input_dim)
+        self.current_inp_emb = nn.Linear(in_features=2, out_features=input_dim)
+        self.node_future_encoder = nn.LSTM(input_size=input_dim,
+                                           hidden_size=hidden_dim,
+                                           num_layers=3,
+                                           bidirectional=True,
+                                           batch_first=True,
+                                           dropout=0.5)
+
+        self.edge_encoder = nn.LSTM(input_size=input_dim,
+                                  hidden_size=hidden_dim,
+                                  num_layers=3,
+                                  bidirectional=True,
+                                  batch_first=True,
+                                  dropout=0.5)
+        self.hidden_dim = hidden_dim
+        # The linear layer that maps from hidden state space to tag space
+        self.hidden2tag = nn.Linear(18*hidden_dim, tagset_size)
+
+    def forward(self, scene):
+        inp = scene
+        embedded = F.relu(self.inp_emb(inp).reshape(scene.shape[0], -1, self.input_dim))
+        # scene shape = num_peds, timestamps, data_dim
+        lstm_out, _ = self.node_future_encoder(embedded)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
+        current = scene[:, -1, :]
+        current_emb = F.relu(self.current_inp_emb(current))
+        distr, _ = self.edge_encoder(current_emb.unsqueeze(1))  # shape num_peds, timestamps ,  2*hidden_dim
+        catted = torch.cat((lstm_out, distr), dim=1).reshape(-1, 18 * self.hidden_dim)
+        tag_space = (scene.clone()[:, -1, :] + self.hidden2tag(catted)).unsqueeze(1)
+
+        return tag_space
 
 
 class OneLayer(nn.Module):
@@ -190,7 +234,7 @@ class OneLayer(nn.Module):
         return out.reshape(1, 1, 2)
 if __name__ == "__main__":
     # model = LSTM_hid(10, 2, 2)
-    model = LSTM_single_with_emb(10, 20, 2)
+    model = LSTM_delta(10, 20, 2)
 
     self_pose = torch.rand(1, 1, 20, 2)
     others_pose = torch.rand(1, 2, 20, 2)

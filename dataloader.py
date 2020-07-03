@@ -68,7 +68,7 @@ class Dataset_from_pkl(Dataset):
         for key in indexes.keys():
             if len(indexes[key]) > max_num_of_peds:
                 max_num_of_peds = len(indexes[key])
-        prepared_data = torch.zeros(end - start, max_num_of_peds, 20, 8)
+        prepared_data = 0 * torch.ones(end - start, max_num_of_peds, 20, 8)
         for start_timestamp in range(start, end):
             for duration in range(0, 20):
                 for ped in dataset[start_timestamp + duration]:
@@ -130,7 +130,7 @@ class Dataset_from_pkl(Dataset):
 
 
 def is_filled(data):
-    return (data[:, 1] == 0.0).any().item()
+    return not (data[:, 1] == 0).any().item()
 
 
 if __name__ == "__main__":

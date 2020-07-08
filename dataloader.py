@@ -123,10 +123,41 @@ class Dataset_from_pkl(Dataset):
         return self.data_length
 
     def __getitem__(self, index):
+        if type(index) == tuple:
+            num_samples = index[1]
+            index = index[0]
+        else:
+            num_samples = None
+        # print (index)
+        # print(num_samples)
         [file, sub_dataset], index_in_sub_dataset = self.get_dataset_from_index(index)
         self.packed_data = []  # num_samples * 20 * numped * 8
         data = self.get_ped_data_in_time(index_in_sub_dataset, index_in_sub_dataset+1, self.data[file][sub_dataset])
-        return data[0]
+        # print(data.shape)
+        if num_samples is not None:
+            storage = {}
+            storage[0] = data
+            max_num_peds = data.shape[1]
+            if index+num_samples > self.data_length:
+                num_samples = self.data_length - index
+
+            for i in range(1, num_samples):
+
+                [file, sub_dataset], index_in_sub_dataset = self.get_dataset_from_index(index+i)
+                self.packed_data = []  # num_samples * 20 * numped * 8
+                storage[i] = self.get_ped_data_in_time(index_in_sub_dataset, index_in_sub_dataset + 1,
+                                                 self.data[file][sub_dataset])
+                if max_num_peds < storage[i].shape[1]:
+                    max_num_peds = storage[i].shape[1]
+
+            out = torch.zeros(num_samples, max_num_peds, 20, 8)
+            for i in range(num_samples):
+                out[i, 0:storage[i].shape[1], :, :] = storage[i]
+            data = out
+
+        else:
+            data = data[0]
+        return data
 
 
 def is_filled(data):
@@ -134,11 +165,12 @@ def is_filled(data):
 
 
 if __name__ == "__main__":
-    dataset = Dataset_from_pkl("/home/robot/repos/trajectories_pred/processed/", data_files=["eth_train.pkl", "zara2_test.pkl"])
+    dataset = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed/", data_files=["eth_train.pkl", "zara2_test.pkl"])
     print(len(dataset))
-    print(dataset[1272].shape)
-    training_set = Dataset_from_pkl("/home/robot/repos/trajectories_pred/processed/", data_files=["eth_train.pkl"])
-    training_generator = torch.utils.data.DataLoader(training_set, batch_size=1)
+    print(dataset[0].shape)
+    print(dataset[0, 10].shape)
+    # training_set = Dataset_from_pkl("/home/robot/repos/trajectories_pred/processed/", data_files=["eth_train.pkl"])
+    # training_generator = torch.utils.data.DataLoader(training_set, batch_size=1)
     #
     # for local_batch in training_generator:
     #     print(local_batch.shape)

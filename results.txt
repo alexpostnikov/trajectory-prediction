@@ -1,0 +1,1 @@
+model: LSTM_delta(40, 20, 2, 1); optimizer = optim.Adam(model.parameters(), lr=0.002); best ade: 0.57, fde: 1.036; data_files=["eth_train.pkl"]

@@ -1,28 +1,40 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-import numpy as np
-from dataloader import Dataset_from_pkl, is_filled
-from model import  LSTM_enc_delta, LSTM_enc_delta_wo_emb, LSTM_enc_delta_stacked
-torch.manual_seed(1)
-from tqdm import tqdm
-from utils import compare_prediction_gt
-from torch.utils.tensorboard import SummaryWriter
 import math
 import time
 from datetime import datetime
+from typing import Tuple
 import os
 
+import torch
+import torch.optim as optim
+from dataloader import Dataset_from_pkl, is_filled
+from model import LSTM_enc_delta_stacked
+from torch.utils.tensorboard import SummaryWriter
 
-def setup_experiment(title, logdir="./tb"):
+from utils import compare_prediction_gt
+
+torch.manual_seed(1)
+
+
+def setup_experiment(title: str, logdir: str="./tb") -> Tuple[SummaryWriter, str, str]:
+    """
+    :param title: name of experiment
+    :param logdir: tb logdir
+    :return: writer object,  modified experiment_name, best_model path
+    """
     experiment_name = "{}@{}".format(title, datetime.now().strftime("%d.%m.%Y-%H:%M:%S"))
     writer = SummaryWriter(log_dir=os.path.join(logdir, experiment_name))
-    best_model_path = f"{title}.best.pth"
+    best_model_path = f"weights/{experiment_name}.best.pth"
     return writer, experiment_name, best_model_path
 
 
-def get_ade_fde(generator, model, limit=1e10):
+def get_ade_fde(generator: torch.utils.data.DataLoader, model: torch.nn.Module, limit: int = 1e10) -> Tuple[int, int]:
+    """
+
+    :param generator: torch generator to get data
+    :param model:   torch module predicting poses. input shape are [numped, history, 2]
+    :param limit: limit number of processed batches. Default - unlimited
+    :return: tuple of ade, fde for given generator and limit of batches
+    """
     ade = []
     fde = []
     for batch_id, local_batch in enumerate(generator):
@@ -55,7 +67,14 @@ def get_ade_fde(generator, model, limit=1e10):
     return (ade, fde)
 
 
-def get_batch_is_filled_mask(batch):
+def get_batch_is_filled_mask(batch: torch.Tensor) -> Tuple[torch.Tensor, int]:
+    """
+
+    :param batch:  batch with shape bs, num_peds, seq, data_shape, currently works only with bs = 1
+    :return: mask shape num_people, seq, data_shape with 0 filled data if person is not fully observable during seq
+    """
+    assert batch.shape[0] == 1
+
     num_peds = batch.shape[1]
     mask = torch.zeros(num_peds, 12, 2)
     full_peds = 0
@@ -63,17 +82,32 @@ def get_batch_is_filled_mask(batch):
         if is_filled(batch[0][ped]):
             mask[ped] = torch.ones(12, 2)
             full_peds += 1
-    return mask, max(full_peds, 1)
+    return mask, full_peds
 
 
-def train(model, training_generator, test_generator, num_epochs, device, lr=0.02, limit=10e7):
+def train(model: torch.nn.Module, training_generator: torch.utils.data.DataLoader,
+          test_generator: torch.utils.data.DataLoader, num_epochs:int, device: torch.device,
+          lr: int = 0.02, limit: int = 10e7):
+    """
+
+    :param model: model for predicting the poses.  input shape are [numped, history, 2]
+    :param training_generator:  torch training generator to get data
+    :param test_generator: torch training generator to get data
+    :param num_epochs: number of epochs to train
+    :param device: torch device. (cpu/cuda)
+    :param lr: learning rate
+    :param limit: limit the number of training batches
+    :return:
+    """
+
     optimizer = optim.Adam(model.parameters(), lr=lr)
     drop_every_epochs = 10
     drop_rate = 1
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, drop_every_epochs,
                                                 drop_rate)  # drop_every_epochs epochs drop by drop_rate lr
-    writer, experiment_name, _ = setup_experiment(model.name+str(lr)+"_hd_"+str(model.lstm_hidden_dim)+"_ed_"
-                                                  + str(model.embedding_dim) + "_nl_"+str(model.num_layers))
+    writer, experiment_name, save_model_path = setup_experiment(model.name+str(lr) + "_hd_" + str(model.lstm_hidden_dim)
+                                                                +"_ed_"  + str(model.embedding_dim)
+                                                                + "_nl_"+str(model.num_layers))
     prev_epoch_loss = 0
 
     for epoch in range(0, num_epochs):
@@ -95,6 +129,8 @@ def train(model, training_generator, test_generator, num_epochs, device, lr=0.02
             num_peds = local_batch.shape[1]
             predictions = torch.zeros(num_peds, 0, 2).requires_grad_(True).to(device)
             mask, full_peds = get_batch_is_filled_mask(gt)
+            if full_peds == 0:
+                continue
             mask = mask.to(device)
 
             local_batch = local_batch[:, :, :8, 2:4]
@@ -120,7 +156,6 @@ def train(model, training_generator, test_generator, num_epochs, device, lr=0.02
             writer.add_scalar(f"loss_epoch", epoch_loss, epoch)
 
         prev_epoch_loss = epoch_loss
-        # scheduler.step()
         model.eval()
         start = time.time()
         with torch.no_grad():
@@ -136,7 +171,7 @@ def train(model, training_generator, test_generator, num_epochs, device, lr=0.02
         print("\t epoch {epoch} val ade {ade:0.4f}, val fde {fde:0.4f} time taken {t:0.2f}".format(epoch=epoch, ade=ade,
                                                                                                    t=time.time()-start,
                                                                                                    fde=fde))
-    torch.save(model.state_dict(), "weights/final " + experiment_name + ".pkl")
+    torch.save(model.state_dict(), save_model_path)
 
 
 if __name__ == "__main__":
@@ -157,4 +192,4 @@ if __name__ == "__main__":
     model = LSTM_enc_delta_stacked(lstm_hidden_dim=10, target_size=2, num_layers=1, embedding_dim=10, bidir=False).to(device)
     # model = LSTM_enc_delta_wo_emb(10, 2, embedding_dim=10).to(device)
 
-    train(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=100)
+    train(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=1e100)

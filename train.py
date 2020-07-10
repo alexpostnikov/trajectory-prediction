@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 from dataloader import Dataset_from_pkl, is_filled
-from model import LSTMTagger, LSTM_hid, LSTM_simple, OneLayer, LSTM_single, LSTM_single_with_emb, LSTM_delta, LSTM_enc_delta, LSTM_enc_delta_wo_emb
+from model import  LSTM_enc_delta, LSTM_enc_delta_wo_emb, LSTM_enc_delta_stacked
 torch.manual_seed(1)
 from tqdm import tqdm
 from utils import compare_prediction_gt
@@ -134,9 +134,9 @@ def train(model, training_generator, test_generator, num_epochs, device, lr=0.02
                 writer.add_scalar(f"train/ade", t_ade, epoch)
                 writer.add_scalar(f"train/fde", t_fde, epoch)
         print("\t epoch {epoch} val ade {ade:0.4f}, val fde {fde:0.4f} time taken {t:0.2f}".format(epoch=epoch, ade=ade,
-                                                                                                   t=time.time() - start,
+                                                                                                   t=time.time()-start,
                                                                                                    fde=fde))
-    torch.save(model.state_dict(), "final " + experiment_name + ".pkl")
+    torch.save(model.state_dict(), "weights/final " + experiment_name + ".pkl")
 
 
 if __name__ == "__main__":
@@ -154,13 +154,7 @@ if __name__ == "__main__":
 
     # model = LSTM_delta(40, 20, 2, 1).to(device)
 
-    model = LSTM_enc_delta(10, 10, 2, 1).to(device)
+    model = LSTM_enc_delta_stacked(lstm_hidden_dim=10, target_size=2, num_layers=1, embedding_dim=10, bidir=False).to(device)
     # model = LSTM_enc_delta_wo_emb(10, 2, embedding_dim=10).to(device)
 
-    train(model, training_generator, test_generator, num_epochs=40, device=device, lr=0.002)
-    #
-    # model = LSTM_delta(40, 20, 2, 4).to(device)
-    # train(model, training_generator, test_generator, 40, device)
-    #
-    # model = LSTM_delta(40, 20, 2, 8).to(device)
-    # train(model, training_generator, test_generator, 40, device)
+    train(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=100)

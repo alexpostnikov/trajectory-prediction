@@ -65,7 +65,7 @@ def visualize(model, gen, limit=10e7, device="cuda") :
                 # plot_traj(gt[0, ped_num:ped_num + 1, 0:8, 2:4], ax[2], color="blue")
 
                 plot_traj(predictions[ped_num:ped_num + 1, :, :].detach().cpu(), ax2)
-                plot_traj(gt[0, ped_num:ped_num + 1, 8:,2:4].detach().cpu(), ax2, color="black")
+                plot_traj(gt[0, ped_num:ped_num + 1, 8:, 2:4].detach().cpu(), ax2, color="black")
                 plot_traj(local_batch[0, ped_num:ped_num + 1, :8, :].detach().cpu(), ax2, color="blue")
                 pass
                 plt.show()
@@ -87,9 +87,9 @@ if __name__ == "__main__":
     generator = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(device)
-    model = LSTM_enc_delta_wo_emb(10, 2, embedding_dim=10).to(device)
+    model = LSTM_enc_delta(10, 10, 2, 1).to(device)
     # model = LSTM_enc_delta(10, 10, 2, 10).to(device)
-    path = "/home/robot/repos/trajectory-prediction/final LSTM_enc_delta_wo_emb0.002_hd_10_ed_10_nl_1@08.07.2020-13:08:31.pkl"
+    path = "/home/robot/repos/trajectory-prediction/final LSTM_enc_delta0.002_hd_10_ed_10_nl_1@08.07.2020-16:17:16.pkl"
     model.load_state_dict(torch.load(path))
     # model = torch.load()
 

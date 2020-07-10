@@ -230,7 +230,6 @@ class LSTM_enc_delta(nn.Module):
 
     def __init__(self, lstm_hidden_dim, embedding_dim, target_size, num_layers=1):
         super(LSTM_enc_delta, self).__init__()
-
         self.name = "LSTM_enc_delta"
         self.embedding_dim = embedding_dim
         self.lstm_hidden_dim = lstm_hidden_dim
@@ -341,6 +340,65 @@ class LSTM_enc_delta_wo_emb(nn.Module):
         return tag_space
 
 
+class LstmEncDeltaStacked(nn.Module):
+    """
+    model that actually predicts delta movements (output last timestamp + predicted delta),
+    with encoding person history and neighbors relative positions.
+    """
+
+    def __init__(self, lstm_hidden_dim, target_size, num_layers=1, embedding_dim=10, bidir=True):
+        super(LstmEncDeltaStacked, self).__init__()
+        self.name = "LstmEncDeltaStacked"
+        self.embedding_dim = embedding_dim
+        self.lstm_hidden_dim = lstm_hidden_dim
+        self.num_layers = num_layers
+        self.dir_number = 1
+        if bidir:
+            self.dir_number = 2
+        self.node_hist_encoder = nn.LSTM(input_size=2,
+                                           hidden_size=lstm_hidden_dim,
+                                           num_layers=num_layers,
+                                           bidirectional=bidir,
+                                           batch_first=True,
+                                           dropout=0.5)
+
+        self.edge_encoder = nn.LSTM(input_size=2,
+                                  hidden_size=lstm_hidden_dim,
+                                  num_layers=num_layers,
+                                  bidirectional=bidir,
+                                  batch_first=True,
+                                  dropout=0.5)
+
+        self.decoder = nn.LSTM(input_size=self.dir_number * lstm_hidden_dim,
+                                    hidden_size=embedding_dim,
+                                    num_layers=num_layers,
+                                    bidirectional=bidir,
+                                    batch_first=True,
+                                    dropout=0.5)
+
+        # The linear layer that maps from hidden state space to pose space
+
+        self.hidden2pose = nn.Linear(9 * self.dir_number * embedding_dim, target_size)
+
+    def forward(self, scene: torch.Tensor) -> torch.Tensor:
+        """
+        :param scene: tensor of shape num_peds, history_size, data_dim
+        :return: predicted poses for each agent at next timestep
+        """
+        bs = scene.shape[0]
+        inp = scene
+
+        lstm_out, hid = self.node_hist_encoder(inp)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
+        current = scene[:, -1, :] # num_people, data_dim
+        np, data_dim = current.shape
+        stacked = current.flatten().repeat(np).reshape(np, np * data_dim)
+        deltas = (stacked - current.repeat(1, np)).reshape(np, np, data_dim) # np, np, data_dim
+        distruction, _ = self.edge_encoder(deltas)
+        catted = torch.cat((lstm_out, distruction[:, -1:, :]), dim=1)
+        decoded, _ = self.decoder(catted)
+        dec_reshaped = decoded.reshape(bs, -1)
+        tag_space = (scene.clone()[:, -1, :] + self.hidden2pose(dec_reshaped)).unsqueeze(1)
+        return tag_space
 
 class OneLayer(nn.Module):
     def __init__(self):

@@ -1,13 +1,13 @@
 import math
 import time
 from datetime import datetime
-from typing import Tuple
+from typing import Tuple, Union
 import os
 
 import torch
 import torch.optim as optim
 from dataloader import Dataset_from_pkl, is_filled
-from model import LSTM_enc_delta_stacked
+from model import LstmEncDeltaStacked
 from torch.utils.tensorboard import SummaryWriter
 
 from utils import compare_prediction_gt
@@ -87,7 +87,7 @@ def get_batch_is_filled_mask(batch: torch.Tensor) -> Tuple[torch.Tensor, int]:
 
 def train(model: torch.nn.Module, training_generator: torch.utils.data.DataLoader,
           test_generator: torch.utils.data.DataLoader, num_epochs:int, device: torch.device,
-          lr: int = 0.02, limit: int = 10e7):
+          lr: Union[int, float] = 0.02, limit: Union[int, float] = 10e7):
     """
 
     :param model: model for predicting the poses.  input shape are [numped, history, 2]
@@ -189,7 +189,7 @@ if __name__ == "__main__":
 
     # model = LSTM_delta(40, 20, 2, 1).to(device)
 
-    model = LSTM_enc_delta_stacked(lstm_hidden_dim=10, target_size=2, num_layers=1, embedding_dim=10, bidir=False).to(device)
+    model = LstmEncDeltaStacked(lstm_hidden_dim=10, target_size=2, num_layers=1, embedding_dim=10, bidir=False).to(device)
     # model = LSTM_enc_delta_wo_emb(10, 2, embedding_dim=10).to(device)
 
     train(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=1e100)

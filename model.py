@@ -340,11 +340,15 @@ class LSTM_enc_delta_wo_emb(nn.Module):
         return tag_space
 
 
-class LSTM_enc_delta_stacked(nn.Module):
+class LstmEncDeltaStacked(nn.Module):
+    """
+    model that actually predicts delta movements (output last timestamp + predicted delta),
+    with encoding person history and neighbors relative positions.
+    """
 
     def __init__(self, lstm_hidden_dim, target_size, num_layers=1, embedding_dim=10, bidir=True):
-        super(LSTM_enc_delta_stacked, self).__init__()
-        self.name = "LSTM_enc_delta_stacked"
+        super(LstmEncDeltaStacked, self).__init__()
+        self.name = "LstmEncDeltaStacked"
         self.embedding_dim = embedding_dim
         self.lstm_hidden_dim = lstm_hidden_dim
         self.num_layers = num_layers
@@ -389,12 +393,6 @@ class LSTM_enc_delta_stacked(nn.Module):
         np, data_dim = current.shape
         stacked = current.flatten().repeat(np).reshape(np, np * data_dim)
         deltas = (stacked - current.repeat(1, np)).reshape(np, np, data_dim) # np, np, data_dim
-        # non_self_deltas = deltas[deltas != 0]
-        # hiden_state = torch.zeros_like(hid[0])
-        # cell_state = torch.zeros_like(hid[1])
-        # for person_id in range(np):
-
-        # distruction, _ = self.edge_encoder(non_self_deltas.reshape(np,np-1,-1))
         distruction, _ = self.edge_encoder(deltas)
         catted = torch.cat((lstm_out, distruction[:, -1:, :]), dim=1)
         decoded, _ = self.decoder(catted)

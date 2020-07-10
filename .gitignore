@@ -132,3 +132,7 @@ dmypy.json
 .idea/
 *.pkl
 tb/
+
+lstm_test.ipynb
+NHE_EE.ipynb
+train.ipynb

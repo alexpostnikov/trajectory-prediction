@@ -92,7 +92,10 @@ class LSTM_simple(nn.Module):
     def __init__(self, hidden_dim, input_dim, tagset_size, num_pred=12):
         super(LSTM_simple, self).__init__()
         self.num_pred = num_pred
-
+        self.name = "LSTM_simple"
+        self.embedding_dim = 0
+        self.num_layers = 0
+        self.lstm_hidden_dim = hidden_dim
         self.node_future_encoder = nn.LSTM(input_size=input_dim,
                               hidden_size=hidden_dim,
                               bidirectional=True,
@@ -117,7 +120,10 @@ class LSTM_single(nn.Module):
     def __init__(self, hidden_dim, input_dim, tagset_size, num_pred=12):
         super(LSTM_single, self).__init__()
         self.num_pred = num_pred
-
+        self.name = "LSTM_single"
+        self.embedding_dim = 0
+        self.num_layers = 0
+        self.lstm_hidden_dim = hidden_dim
         self.node_future_encoder = nn.LSTM(input_size=input_dim,
                               hidden_size=hidden_dim,
                               bidirectional=True,
@@ -402,9 +408,6 @@ class LstmEncDeltaStacked(nn.Module):
         return tag_space
 
 
-
-
-
 class LstmEncDeltaStackedVel(nn.Module):
     """
     model that actually predicts delta movements (output last timestamp + predicted delta),
@@ -481,7 +484,7 @@ class LstmEncDeltaStackedFullPred(nn.Module):
     with encoding person history and neighbors relative positions.
     """
 
-    def __init__(self, lstm_hidden_dim, target_size, num_layers=1, embedding_dim=10, bidir=True):
+    def __init__(self, lstm_hidden_dim, target_size, num_layers=1, embedding_dim=10, bidir=True, dropout_p=0.5):
         super(LstmEncDeltaStackedFullPred, self).__init__()
         self.name = "LstmEncDeltaStackedFullPred"
         self.embedding_dim = embedding_dim
@@ -504,25 +507,20 @@ class LstmEncDeltaStackedFullPred(nn.Module):
                                     batch_first=True,
                                     dropout=0.5)
 
-        self.decoder = nn.LSTM(input_size=self.dir_number * lstm_hidden_dim,
-                               hidden_size=embedding_dim,
-                               num_layers=num_layers,
-                               bidirectional=bidir,
-                               batch_first=True,
-                               dropout=0.5)
 
-        self.gru = nn.GRUCell(182, 128)
+        self.gru = nn.GRUCell(9*lstm_hidden_dim*self.dir_number + 2, 16)
 
-        self.action = nn.Linear(4, 2)
-        self.state = nn.Linear(180, 128)
+        self.action = nn.Linear(2, 2)
+        self.state = nn.Linear(9*lstm_hidden_dim*self.dir_number, 16)
 
         # The linear layer that maps from hidden state space to pose space
 
         self.hidden2pose = nn.Linear(9 * self.dir_number * embedding_dim, target_size)
-        self.proj_to_GMM_log_pis = nn.Linear(128, 1)
-        self.proj_to_GMM_mus = nn.Linear(128, 2)
-        self.proj_to_GMM_log_sigmas = nn.Linear(128, 2)
-        self.proj_to_GMM_corrs = nn.Linear(128, 1)
+
+        self.proj_to_GMM_mus = nn.Linear(16, 2)
+        self.proj_to_GMM_log_sigmas = nn.Linear(16, 2)
+        self.proj_to_GMM_corrs = nn.Linear(16, 1)
+        self.dropout_p = dropout_p
 
     def project_to_GMM_params(self, tensor) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
         """
@@ -536,11 +534,11 @@ class LstmEncDeltaStackedFullPred(nn.Module):
             - log_sigmas: Standard Deviation (logarithm) of each GMM component. [N, D]
             - corrs: Correlation between the GMM components. [N]
         """
-        log_pis = self.proj_to_GMM_log_pis(tensor)
-        mus = self.proj_to_GMM_mus(tensor)
-        log_sigmas = self.proj_to_GMM_log_sigmas(tensor)
-        corrs = torch.tanh(self.proj_to_GMM_corrs(tensor))
-        return log_pis, mus, log_sigmas, corrs
+
+        mus = F.dropout(self.proj_to_GMM_mus(tensor), self.dropout_p)
+        log_sigmas = F.dropout(self.proj_to_GMM_log_sigmas(tensor),self.dropout_p)
+        corrs = F.dropout(torch.tanh(self.proj_to_GMM_corrs(tensor)),self.dropout_p)
+        return mus, log_sigmas, corrs
 
     def forward(self, scene: torch.Tensor):
         """
@@ -548,46 +546,47 @@ class LstmEncDeltaStackedFullPred(nn.Module):
         :return: predicted poses for each agent at next timestep
         """
         bs = scene.shape[0]
-        inp = scene
+        poses = scene[:, :, :2]
+        pv = scene[:, :, :4]
 
-        lstm_out, hid = self.node_hist_encoder(inp)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
-
+        lstm_out, hid = self.node_hist_encoder(pv)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
 
         current_pose = scene[:, -1, :2]  # num_people, data_dim
-        current_state = scene[:, -1, :]
+        current_state = poses[:, -1, :]
         np, data_dim = current_pose.shape
         stacked = current_pose.flatten().repeat(np).reshape(np, np * data_dim)
         deltas = (stacked - current_pose.repeat(1, np)).reshape(np, np, data_dim)  # np, np, data_dim
 
         distruction, _ = self.edge_encoder(deltas)
 
-
         # catted = torch.cat((lstm_out+lstm_out_vel, distruction[:, -1:, :]), dim=1)
         catted = torch.cat((lstm_out, distruction[:, -1:, :]), dim=1)
 
-        a_0 = self.action(current_state.reshape(bs, -1))
+        a_0 = F.dropout(self.action(current_state.reshape(bs, -1)), self.dropout_p)
 
-        state = self.state(catted.reshape(bs, -1))
+        state = F.dropout(self.state(catted.reshape(bs, -1)),self.dropout_p)
 
         gauses = []
-        inp = torch.cat((catted.reshape(bs, -1), a_0), dim=-1)
+        inp = F.dropout(torch.cat((catted.reshape(bs, -1), a_0), dim=-1), self.dropout_p)
         for i in range(12):
 
             h_state = self.gru(inp.reshape(bs, -1), state)
 
-            log_pis, mus, log_sigmas, corrs = self.project_to_GMM_params(h_state)
-
-            variance = torch.exp(log_sigmas).unsqueeze(1) ** 2
-            m_diag = variance * torch.eye(2)
-            sigma_xy = torch.prod(torch.exp(log_sigmas), dim=-1)
+            deltas, log_sigmas, corrs = self.project_to_GMM_params(h_state)
+            deltas = torch.clamp(deltas, max=1.5, min=-1.5)
+            mus = deltas + current_state
+            current_state = mus.clone()
+            variance = torch.clamp(torch.exp(log_sigmas).unsqueeze(1) ** 2, max=1e3)
+            m_diag = variance * torch.eye(2).to(variance.device)
+            sigma_xy = torch.clamp(torch.prod(torch.exp(log_sigmas), dim=-1), min=1e-8, max=1e3)
             t = (sigma_xy * corrs.squeeze()).reshape(-1, 1, 1)
-            anti_diag = t * torch.tensor([[0, 1], [1, 0]])
-            cov_matrix = m_diag + anti_diag
+            cov_matrix = m_diag # + anti_diag
             gaus = MultivariateNormal(mus, cov_matrix)
             gauses.append(gaus)
-            a_t = gaus.rsample()
+            # a_t = gaus.rsample()
+            a_t = mus
             state = h_state
-            inp = torch.cat((catted.reshape(bs, -1), a_t), dim=-1)
+            inp = F.dropout(torch.cat((catted.reshape(bs, -1), a_t), dim=-1), self.dropout_p)
 
         return gauses
 

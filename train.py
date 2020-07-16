@@ -7,12 +7,39 @@ import os
 import torch
 import torch.optim as optim
 from dataloader import Dataset_from_pkl, is_filled
-from model import LstmEncDeltaStacked, LstmEncDeltaStackedVel, LstmEncDeltaStackedFullPred
+from model import LstmEncDeltaStacked, LstmEncDeltaStackedVel, LstmEncDeltaStackedFullPred, LSTM_simple, LSTM_single, LSTM_enc_delta_wo_emb, LstmEncDeltaStacked
 from torch.utils.tensorboard import SummaryWriter
+
+import matplotlib.pyplot as plt
+from visualize import plot_traj
 
 from utils import compare_prediction_gt
 
 torch.manual_seed(1)
+
+
+def plot(predictions, gt):
+    num_peds = gt.shape[1]
+    for ped_num in range(num_peds):
+        if is_filled(gt[0, ped_num, :8, :]):
+            fig = plt.figure()
+            ax1 = fig.add_subplot(2, 1, 1)
+            ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
+            # fig, ax = plt.subplots(1, 3, figsize=(9, 3))
+            plot_traj(gt[0, :, :8, 2:4].detach().cpu(), ax=ax1, color="blue")
+
+            # data = local_batch[0, :, :, 2:4].cpu()
+            # plot_traj(data, ax=ax[0], color="blue")
+
+            # data = torch.cat((gt[0,ped_num:ped_num+1,0:8,2:4], predictions[ped_num:ped_num+1,:,:].detach().cpu()),dim=1)\
+
+            # plot_traj(gt[0, ped_num:ped_num + 1, 0:8, 2:4], ax[2], color="blue")
+
+            plot_traj(predictions[ped_num:ped_num + 1, :, :].detach().cpu(), ax2)
+            plot_traj(gt[0, ped_num:ped_num + 1, 8:, 2:4].detach().cpu(), ax2, color="black")
+            plot_traj(gt[0, ped_num:ped_num + 1, :8, 2:4].detach().cpu(), ax2, color="blue")
+            pass
+            plt.show()
 
 
 def setup_experiment(title: str, logdir: str="./tb") -> Tuple[SummaryWriter, str, str]:
@@ -87,17 +114,13 @@ def get_ade_fde_vel(generator: torch.utils.data.DataLoader, model: torch.nn.Modu
         gt = local_batch.clone()
         local_batch = local_batch.to(device)
         local_batch[0, :, 8:, :] = torch.zeros_like(local_batch[0, :, 8:, :])
-        num_peds = local_batch.shape[1]
-        predictions = torch.zeros(num_peds, 0, 2).requires_grad_(True).to(device)
+        # num_peds = local_batch.shape[1]
 
-        for t in range(0, 12):
-            prediction = model(local_batch[0, :, 0 + t: 8 + t, 2:6])
-
-            #                 prediction = prediction.unsqueeze(1)
-            predictions = torch.cat((predictions, prediction), dim=1)
-            new_vel = (prediction - local_batch[0, :, 7 + t:8 + t, :2]) / 0.4
-            # local_batch = torch.cat((local_batch, torch.cat((prediction, new_vel), dim=2).unsqueeze(0)), dim=2)
-            local_batch[0, :, 8 + t:9 + t, 2:6] = torch.cat((prediction, new_vel), dim=2).detach()
+        prediction = model(local_batch[0, :, 0:8, 2:6])
+        predictions = torch.cat([prediction[i].loc for i in range(12)]).reshape(12, -1, 2).permute(1, 0, 2)
+        if torch.any(predictions != predictions):
+            print("Warn! nan pred")
+            continue
 
         metrics = compare_prediction_gt(predictions.detach().cpu(), gt.detach().cpu()[0][:, :, 2:4])
 
@@ -107,7 +130,7 @@ def get_ade_fde_vel(generator: torch.utils.data.DataLoader, model: torch.nn.Modu
             fde.append(local_fde)
     ade = sum(ade) / len(ade)
     fde = sum(fde) / len(fde)
-    return (ade, fde)
+    return ade, fde
 
 def get_batch_is_filled_mask(batch: torch.Tensor) -> Tuple[torch.Tensor, int]:
     """
@@ -189,15 +212,16 @@ def train(model: torch.nn.Module, training_generator: torch.utils.data.DataLoade
             loss.backward()
             optimizer.step()
 
+
         epoch_loss = epoch_loss / (batch_id - num_skipped)
         print("epoch {epoch} loss {el:0.4f}, time taken {t:0.2f}, delta {delta:0.3f}".format(epoch=epoch, el=epoch_loss,
                                                                                              t=time.time() - start,
                                                                                              delta=-prev_epoch_loss + epoch_loss))
-
         if writer is not None:
             writer.add_scalar(f"loss_epoch", epoch_loss, epoch)
 
         prev_epoch_loss = epoch_loss
+
         model.eval()
         start = time.time()
         with torch.no_grad():
@@ -218,9 +242,10 @@ def train(model: torch.nn.Module, training_generator: torch.utils.data.DataLoade
 
 def train_pose_vel(model: torch.nn.Module, training_generator: torch.utils.data.DataLoader,
           test_generator: torch.utils.data.DataLoader, num_epochs:int, device: torch.device,
-          lr: Union[int, float] = 0.02, limit: Union[int, float] = 10e7):
+          lr: Union[int, float] = 0.02, limit: Union[int, float] = 10e7, validate: bool = True):
     """
 
+    :param validate:
     :param model: model for predicting the poses.  input shape are [numped, history, 2]
     :param training_generator:  torch training generator to get data
     :param test_generator: torch training generator to get data
@@ -249,18 +274,21 @@ def train_pose_vel(model: torch.nn.Module, training_generator: torch.utils.data.
         for batch_id, local_batch in enumerate(training_generator):
             if batch_id > limit:
                 # skip to next epoch
-                continue
+                break
 
-            # angle = torch.rand(1) * math.pi
-            # rot = torch.tensor([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
-            # local_batch[:, :, :, 2:6] = local_batch[:, :, :, 2:6] @ rot
+            angle = torch.rand(1) * math.pi
+            rot = torch.tensor([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
+            rotrot = torch.zeros(4, 4)
+            rotrot[:2, :2] = rot.clone()
+            rotrot[2:, 2:] = rot.clone()
+            local_batch[:, :, :, 2:6] = local_batch[:, :, :, 2:6] @ rotrot
             local_batch = local_batch.to(device)
             gt = local_batch.clone()
             model.zero_grad()
             num_peds = local_batch.shape[1]
-            predictions = torch.zeros(num_peds, 0, 2).requires_grad_(True).to(device)
             mask, full_peds = get_batch_is_filled_mask(gt)
             if full_peds == 0:
+                num_skipped += 1
                 continue
             mask = mask.to(device)
 
@@ -268,16 +296,20 @@ def train_pose_vel(model: torch.nn.Module, training_generator: torch.utils.data.
             if torch.sum(mask) == 0.0:
                 num_skipped += 1
                 continue
-            for t in range(0, 12):
-                prediction = model(local_batch[0, :, 0 + t:8 + t, :])
-                predictions = torch.cat((predictions, prediction), dim=1)
-                new_vel = gt[0, :, 8+t:9+t:, 4:6]
-                local_batch = torch.cat((local_batch, torch.cat((prediction, new_vel), dim=2).unsqueeze(0)), dim=2)
-
-            loss = torch.sum(torch.norm(mask * (predictions - gt[0, :, 8:, 2:4]), dim=-1))
-            epoch_loss += loss.item() / full_peds
+            prediction = model(local_batch[0, :, 0:8, :4])
+            gt_prob = torch.cat(([prediction[i].log_prob(gt[0, :, 8 + i, 2:4]) for i in range(12)])).reshape(-1, 12)
+            loss = -torch.sum(gt_prob * mask[:, :, 0]) \
+                   + 0.3 * torch.sum(torch.cat(([prediction[i].stddev for i in range(12)])))
             loss.backward()
             optimizer.step()
+            predictions = torch.cat([prediction[i].loc for i in range(12)]).reshape(12, -1, 2).permute(1, 0, 2)
+
+            pass
+            #plot(predictions, gt)
+            epoch_loss += loss.item() / full_peds
+            if (batch_id - num_skipped) % 100 == 99:
+                print("\tbatch:", str(batch_id - num_skipped), " loss: ", epoch_loss / (batch_id - num_skipped))
+
 
         epoch_loss = epoch_loss / (batch_id - num_skipped)
         print("epoch {epoch} loss {el:0.4f}, time taken {t:0.2f}, delta {delta:0.3f}".format(epoch=epoch, el=epoch_loss,
@@ -288,21 +320,22 @@ def train_pose_vel(model: torch.nn.Module, training_generator: torch.utils.data.
             writer.add_scalar(f"loss_epoch", epoch_loss, epoch)
 
         prev_epoch_loss = epoch_loss
-        model.eval()
-        start = time.time()
-        with torch.no_grad():
-            ade, fde = get_ade_fde_vel(test_generator, model)
+        if validate:
+            model.eval()
+            start = time.time()
+            with torch.no_grad():
+                ade, fde = get_ade_fde_vel(test_generator, model)
 
-            if writer is not None:
-                writer.add_scalar(f"test/ade", ade, epoch)
-                writer.add_scalar(f"test/fde", fde, epoch)
-            t_ade, t_fde = get_ade_fde_vel(training_generator, model, 100)
-            if writer is not None:
-                writer.add_scalar(f"train/ade", t_ade, epoch)
-                writer.add_scalar(f"train/fde", t_fde, epoch)
-        print("\t epoch {epoch} val ade {ade:0.4f}, val fde {fde:0.4f} time taken {t:0.2f}".format(epoch=epoch, ade=ade,
-                                                                                                   t=time.time()-start,
-                                                                                                   fde=fde))
+                if writer is not None:
+                    writer.add_scalar(f"test/ade", ade, epoch)
+                    writer.add_scalar(f"test/fde", fde, epoch)
+                t_ade, t_fde = get_ade_fde_vel(training_generator, model, 400)
+                if writer is not None:
+                    writer.add_scalar(f"train/ade", t_ade, epoch)
+                    writer.add_scalar(f"train/fde", t_fde, epoch)
+            print("\t epoch {epoch} val ade {ade:0.4f}, val fde {fde:0.4f} time taken {t:0.2f}".format(epoch=epoch, ade=ade,
+                                                                                                       t=time.time()-start,
+                                                                                                       fde=fde))
     torch.save(model.state_dict(), save_model_path)
 
 
@@ -314,17 +347,20 @@ if __name__ == "__main__":
     test_set = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed/", data_files=["eth_test.pkl"])
     test_generator = torch.utils.data.DataLoader(test_set, batch_size=1, shuffle=True)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
     print(device)
-    # model  = LSTM_single(20, 2, 2).to(device)
-    # model  = LSTM_simple(10, 2, 2).to(device)
+    model = LSTM_simple(20, 2, 2).to(device)
+    model = LSTM_single(20, 2, 2).to(device)
+
 
     # model = LSTM_single_with_emb(40, 20, 2).to(device)
 
     # model = LSTM_delta(40, 20, 2, 1).to(device)
+    model = LSTM_enc_delta_wo_emb(10, 2, embedding_dim=10).to(device)
+    model = LstmEncDeltaStacked(lstm_hidden_dim=10, target_size=2, num_layers=1, embedding_dim=10, bidir=False).to(device)
+    # model = LstmEncDeltaStackedFullPred(lstm_hidden_dim=16, target_size=2, num_layers=1, embedding_dim=32, bidir=True, dropout_p=0.3).to(device)
 
-    # model = LstmEncDeltaStacked(lstm_hidden_dim=10, target_size=2, num_layers=1, embedding_dim=10, bidir=False).to(device)
-    model = LstmEncDeltaStackedVel(lstm_hidden_dim=30, target_size=2, num_layers=1, embedding_dim=10, bidir=False).to(device)
 
-    # model = LSTM_enc_delta_wo_emb(10, 2, embedding_dim=10).to(device)
 
-    train_pose_vel(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=200)
+    # train_pose_vel(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.0002, limit=400)
+    train(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=400)

@@ -1,6 +1,6 @@
 import torch
 from dataloader import Dataset_from_pkl, is_filled
-from model import LSTMTagger, LSTM_hid, LSTM_simple, OneLayer, LSTM_single, LSTM_single_with_emb, LSTM_delta, LSTM_enc_delta, LSTM_enc_delta_wo_emb
+from model import LSTMTagger, OneLayer, LSTM_single, LSTM_single_with_emb, LSTM_delta, LSTM_enc_delta, LSTM_enc_delta_wo_emb
 torch.manual_seed(1)
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt

@@ -27,20 +27,10 @@ def plot(predictions, gt):
             fig = plt.figure()
             ax1 = fig.add_subplot(2, 1, 1)
             ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
-            # fig, ax = plt.subplots(1, 3, figsize=(9, 3))
             plot_traj(gt[0, :, :8, 2:4].detach().cpu(), ax=ax1, color="blue")
-
-            # data = local_batch[0, :, :, 2:4].cpu()
-            # plot_traj(data, ax=ax[0], color="blue")
-
-            # data = torch.cat((gt[0,ped_num:ped_num+1,0:8,2:4], predictions[ped_num:ped_num+1,:,:].detach().cpu()),dim=1)\
-
-            # plot_traj(gt[0, ped_num:ped_num + 1, 0:8, 2:4], ax[2], color="blue")
-
             plot_traj(predictions[ped_num:ped_num + 1, :, :].detach().cpu(), ax2)
             plot_traj(gt[0, ped_num:ped_num + 1, 8:, 2:4].detach().cpu(), ax2, color="black")
             plot_traj(gt[0, ped_num:ped_num + 1, :8, 2:4].detach().cpu(), ax2, color="blue")
-            pass
             plt.show()
 
 
@@ -60,7 +50,6 @@ def setup_experiment(title: str, logdir: str = "./tb") -> Tuple[SummaryWriter, s
 
 def get_ade_fde(generator: torch.utils.data.DataLoader, model: torch.nn.Module, limit: int = 1e10) -> Tuple[int, int]:
     """
-
     :param generator: torch generator to get data
     :param model:   torch module predicting poses. input shape are [numped, history, 2]
     :param limit: limit number of processed batches. Default - unlimited
@@ -101,7 +90,6 @@ def get_ade_fde(generator: torch.utils.data.DataLoader, model: torch.nn.Module, 
 def get_ade_fde_vel(generator: torch.utils.data.DataLoader, model: torch.nn.Module, limit: int = 1e10) -> Tuple[
     int, int]:
     """
-
     :param generator: torch generator to get data
     :param model:   torch module predicting poses. input shape are [numped, history, 2]
     :param limit: limit number of processed batches. Default - unlimited
@@ -139,7 +127,6 @@ def get_ade_fde_vel(generator: torch.utils.data.DataLoader, model: torch.nn.Modu
 
 def get_batch_is_filled_mask(batch: torch.Tensor) -> Tuple[torch.Tensor, int]:
     """
-
     :param batch:  batch with shape bs, num_peds, seq, data_shape, currently works only with bs = 1
     :return: mask shape num_people, seq, data_shape with 0 filled data if person is not fully observable during seq
     """
@@ -300,7 +287,6 @@ def train_pose_vel(model: torch.nn.Module, training_generator: torch.utils.data.
             local_batch = local_batch.to(device)
             gt = local_batch.clone()
             model.zero_grad()
-            num_peds = local_batch.shape[1]
             mask, full_peds = get_batch_is_filled_mask(gt)
             if full_peds == 0:
                 num_skipped += 1
@@ -379,6 +365,8 @@ if __name__ == "__main__":
     model = LstmEncDeltaStackedFullPredMultyGaus(lstm_hidden_dim=64, num_layers=1,
                                                  bidir=True, dropout_p=0.0, num_modes=30).to(device)
 
-    train_pose_vel(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.001, limit=1e800)
-    # train(mod    #num la 2el, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=1e400)
-    #lstm_hidden_dim=64 nm 30 loss 0.3
+    train_pose_vel(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.001, limit=800)
+
+    # train(mod #num la 2el, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=1e400)
+
+    # lstm_hidden_dim=64 nm 30 loss 0.3

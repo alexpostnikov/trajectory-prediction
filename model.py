@@ -652,7 +652,7 @@ class LstmEncDeltaStackedFullPred(nn.Module):
 
 class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
     """
-    model that actually predicts delta movements (output last timestamp + predicted delta),
+    model that actually predicts delta movements (but output last timestamp + predicted deltas),
     with encoding person history and neighbors relative positions.
     """
 
@@ -666,7 +666,7 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
         self.dir_number = 1
         if bidir:
             self.dir_number = 2
-        self.node_hist_encoder = nn.LSTM(input_size=4,
+        self.node_hist_encoder = nn.LSTM(input_size=2,
                                          hidden_size=lstm_hidden_dim,
                                          num_layers=num_layers,
                                          bidirectional=bidir,
@@ -684,10 +684,6 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
 
         self.action = nn.Linear(2, 2)
         self.state = nn.Linear(2 * lstm_hidden_dim * self.dir_number, num_modes*2)
-
-        # The linear layer that maps from hidden state space to pose space
-
-        # self.hidden2pose = nn.Linear(9 * self.dir_number * embedding_dim, target_size)
 
         self.proj_to_GMM_log_pis = nn.Linear(num_modes*2, num_modes)
         self.proj_to_GMM_mus = nn.Linear(num_modes*2, num_modes*2)
@@ -716,11 +712,11 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
     def forward(self, scene: torch.Tensor):
         """
         :param scene: tensor of shape num_peds, history_size, data_dim
-        :return: predicted poses for each agent at next timestep
+        :return: predicted poses distributions for each agent at next 12 timesteps
         """
         bs = scene.shape[0]
         poses = scene[:, :, :2]
-        pv = scene[:, :, :4]
+        pv = scene[:, :, 2:4]
 
         lstm_out, hid = self.node_hist_encoder(pv)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
 
@@ -731,14 +727,9 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
         deltas = (stacked - current_pose.repeat(1, np)).reshape(np, np, data_dim)  # np, np, data_dim
 
         distruction, _ = self.edge_encoder(deltas)
-
-        # catted = torch.cat((lstm_out+lstm_out_vel, distruction[:, -1:, :]), dim=1)
         catted = torch.cat((lstm_out[:, -1:, :], distruction[:, -1:, :]), dim=1)
-
         a_0 = F.dropout(self.action(current_state.reshape(bs, -1)), self.dropout_p)
-
         state = F.dropout(self.state(catted.reshape(bs, -1)), self.dropout_p)
-
 
         current_state = current_state.unsqueeze(1)
         gauses = []
@@ -767,12 +758,8 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
             gmm = D.MixtureSameFamily(mix, comp)
             t = (sigma_xy * corrs.squeeze()).reshape(-1, 1, 1)
             cov_matrix = m_diag  # + anti_diag
-            # gaus = MultivariateNormal(mus, cov_matrix)
             gauses.append(gmm)
-            # a_t = gaus.rsample()
-            # a_t = mus
-            a_t = gmm.sample()
-            # a_t = F.dropout(self.action(mus.reshape(bs, -1)), self.dropout_p)
+            a_t = gmm.sample()  # possible grad problems?
             state = h_state
             inp = F.dropout(torch.cat((catted.reshape(bs, -1), a_t), dim=-1), self.dropout_p)
 

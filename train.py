@@ -108,7 +108,7 @@ def get_ade_fde_vel(generator: torch.utils.data.DataLoader, model: torch.nn.Modu
         local_batch[0, :, 8:, :] = torch.zeros_like(local_batch[0, :, 8:, :])
         # num_peds = local_batch.shape[1]
 
-        prediction = model(local_batch[0, :, 0:8, 2:6])
+        prediction = model(local_batch[0, :, 0:8, 2:8])
         predictions = torch.cat([prediction[i].mean for i in range(12)]).reshape(12, -1, 2).permute(1, 0, 2)
         if torch.any(predictions != predictions):
             print("Warn! nan pred")
@@ -278,12 +278,12 @@ def train_pose_vel(model: torch.nn.Module, training_generator: torch.utils.data.
                 # skip to next epoch
                 break
 
-            angle = torch.rand(1) * math.pi
-            rot = torch.tensor([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
-            rotrot = torch.zeros(4, 4)
-            rotrot[:2, :2] = rot.clone()
-            rotrot[2:, 2:] = rot.clone()
-            local_batch[:, :, :, 2:6] = local_batch[:, :, :, 2:6] @ rotrot
+            # angle = torch.rand(1) * math.pi
+            # rot = torch.tensor([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
+            # rotrot = torch.zeros(4, 4)
+            # rotrot[:2, :2] = rot.clone()
+            # rotrot[2:, 2:] = rot.clone()
+            # local_batch[:, :, :, 2:6] = local_batch[:, :, :, 2:6] @ rotrot
             local_batch = local_batch.to(device)
             gt = local_batch.clone()
             model.zero_grad()
@@ -293,14 +293,14 @@ def train_pose_vel(model: torch.nn.Module, training_generator: torch.utils.data.
                 continue
             mask = mask.to(device)
 
-            local_batch = local_batch[:, :, :8, 2:6]
+            local_batch = local_batch[:, :, :8, 2:8]
             if torch.sum(mask) == 0.0:
                 num_skipped += 1
                 continue
-            prediction = model(local_batch[0, :, 0:8, :4])
+            prediction = model(local_batch[0, :, 0:8, 0:6])
             gt_prob = torch.cat(([prediction[i].log_prob(gt[0, :, 8 + i, 2:4]) for i in range(12)])).reshape(-1, 12)
             loss = -torch.sum(gt_prob * mask[:, :, 0]) \
-                   + 0.3 * torch.sum(torch.cat(([prediction[i].stddev for i in range(12)])))
+                   + 0.5 * torch.sum(torch.cat(([prediction[i].stddev for i in range(12)])))
             loss.backward()
             optimizer.step()
             predictions = torch.cat([prediction[i].mean for i in range(12)]).reshape(12, -1, 2).permute(1, 0, 2)
@@ -365,7 +365,7 @@ if __name__ == "__main__":
     model = LstmEncDeltaStackedFullPredMultyGaus(lstm_hidden_dim=64, num_layers=1,
                                                  bidir=True, dropout_p=0.0, num_modes=30).to(device)
 
-    train_pose_vel(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.001, limit=800)
+    train_pose_vel(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.0005, limit=1e800)
 
     # train(mod #num la 2el, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=1e400)
 

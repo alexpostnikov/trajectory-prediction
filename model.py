@@ -666,12 +666,34 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
         self.dir_number = 1
         if bidir:
             self.dir_number = 2
-        self.node_hist_encoder = nn.LSTM(input_size=2,
+        self.node_hist_encoder = nn.LSTM(input_size=6,
                                          hidden_size=lstm_hidden_dim,
                                          num_layers=num_layers,
                                          bidirectional=bidir,
                                          batch_first=True,
                                          dropout=0.5)
+
+        self.node_hist_encoder_vel = nn.LSTM(input_size=2,
+                                         hidden_size=lstm_hidden_dim,
+                                         num_layers=num_layers,
+                                         bidirectional=bidir,
+                                         batch_first=True,
+                                         dropout=0.5)
+
+        self.node_hist_encoder_acc = nn.LSTM(input_size=2,
+                                             hidden_size=lstm_hidden_dim,
+                                             num_layers=num_layers,
+                                             bidirectional=bidir,
+                                             batch_first=True,
+                                             dropout=0.5)
+
+        self.node_hist_encoder_poses = nn.LSTM(input_size=2,
+                                             hidden_size=lstm_hidden_dim,
+                                             num_layers=num_layers,
+                                             bidirectional=bidir,
+                                             batch_first=True,
+                                             dropout=0.5)
+
 
         self.edge_encoder = nn.LSTM(input_size=2,
                                     hidden_size=lstm_hidden_dim,
@@ -716,9 +738,16 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
         """
         bs = scene.shape[0]
         poses = scene[:, :, :2]
-        pv = scene[:, :, 2:4]
+        pv = scene[:, :, 2:6]
+        vel = scene[:, :, 2:4]
+        acc = scene[:, :, 4:6]
+        pav = scene[:, :, :6]
 
-        lstm_out, hid = self.node_hist_encoder(pv)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
+        # lstm_out, hid = self.node_hist_encoder(pav)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
+        lstm_out_acc, hid = self.node_hist_encoder_acc(acc)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
+        lstm_out_vell, hid = self.node_hist_encoder_vel(vel)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
+        # lstm_out_poses, hid = self.node_hist_encoder_poses(poses)
+        lstm_out = lstm_out_vell + lstm_out_acc # + lstm_out_poses
 
         current_pose = scene[:, -1, :2]  # num_people, data_dim
         current_state = poses[:, -1, :]

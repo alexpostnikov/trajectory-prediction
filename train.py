@@ -9,7 +9,7 @@ import torch.optim as optim
 from dataloader import Dataset_from_pkl, is_filled
 from model import LstmEncDeltaStacked, LstmEncDeltaStackedVel, LstmEncDeltaStackedFullPred, LSTM_single, \
     LSTM_enc_delta_wo_emb, LstmEncDeltaStacked, LstmEncDeltaAllHistStacked
-from model import LstmEncDeltaStackedFullPredMultyGaus
+from model import LstmEncDeltaStackedFullPredMultyGaus, LstmEncDWithAtt
 from torch.utils.tensorboard import SummaryWriter
 import shutil
 import matplotlib.pyplot as plt
@@ -364,8 +364,10 @@ if __name__ == "__main__":
     # model = LstmEncDeltaStackedFullPred(lstm_hidden_dim=16, target_size=2, num_layers=1, embedding_dim=32, bidir=True, dropout_p=0.3).to(device)
     model = LstmEncDeltaStackedFullPredMultyGaus(lstm_hidden_dim=64, num_layers=1,
                                                  bidir=True, dropout_p=0.0, num_modes=30).to(device)
+    # model = LstmEncDWithAtt(lstm_hidden_dim=64, num_layers=1,
+    #                                              bidir=True, dropout_p=0.0, num_modes=30).to(device)
 
-    train_pose_vel(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.0005, limit=1e800)
+    train_pose_vel(model, training_generator, test_generator, num_epochs=100, device=device, lr=0.0005, limit=400)
 
     # train(mod #num la 2el, training_generator, test_generator, num_epochs=100, device=device, lr=0.002, limit=1e400)
 

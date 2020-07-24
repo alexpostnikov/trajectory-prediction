@@ -68,12 +68,17 @@ class Dataset_from_pkl(Dataset):
         for key in indexes.keys():
             if len(indexes[key]) > max_num_of_peds:
                 max_num_of_peds = len(indexes[key])
-        prepared_data = 0 * torch.ones(end - start, max_num_of_peds, 20, 8)
+        prepared_data = 0 * torch.ones(end - start, max_num_of_peds, 20, 14)
         for start_timestamp in range(start, end):
             for duration in range(0, 20):
                 for ped in dataset[start_timestamp + duration]:
-                    ped_id = indexes[start_timestamp].index(ped[0][0])
-                    prepared_data[start_timestamp-start][ped_id][duration] = torch.tensor(ped[0])
+                    if type(ped) == torch.Tensor:
+                        ped_id = indexes[start_timestamp].index(ped[0])
+                        prepared_data[start_timestamp - start][ped_id][duration] = ped.clone()
+                    else:
+                        ped_id = indexes[start_timestamp].index(ped[0][0])
+                        prepared_data[start_timestamp - start][ped_id][duration][0:len(ped[0])] = torch.tensor(ped[0])
+
         return prepared_data
 
     def limit_len(self, new_len):
@@ -103,7 +108,10 @@ class Dataset_from_pkl(Dataset):
         """
         indexes = []
         for person in timestamp_data:
-            indexes.append(person[0][0])
+            if type(person) == torch.Tensor:
+                indexes.append(float(person[0]))
+            else:
+                indexes.append(float(person[0][0]))
         return set(indexes)
 
     def get_dataset_from_index(self, data_index: int):
@@ -150,7 +158,7 @@ class Dataset_from_pkl(Dataset):
                 if max_num_peds < storage[i].shape[1]:
                     max_num_peds = storage[i].shape[1]
 
-            out = torch.zeros(num_samples, max_num_peds, 20, 8)
+            out = torch.zeros(num_samples, max_num_peds, 20, 14)
             for i in range(num_samples):
                 out[i, 0:storage[i].shape[1], :, :] = storage[i]
             data = out
@@ -165,8 +173,9 @@ def is_filled(data):
 
 
 if __name__ == "__main__":
-    dataset = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed/", data_files=["eth_train.pkl", "zara2_test.pkl"])
+    dataset = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed_with_forces/", data_files=["eth_train.pkl", "zara2_test.pkl"])
     print(len(dataset))
+    t = dataset[0]
     print(dataset[0].shape)
     print(dataset[0, 10].shape)
     # training_set = Dataset_from_pkl("/home/robot/repos/trajectories_pred/processed/", data_files=["eth_train.pkl"])

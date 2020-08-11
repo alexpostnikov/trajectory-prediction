@@ -681,7 +681,7 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
                                          dropout=0.5)
 
         self.node_hist_encoder_acc = nn.LSTM(input_size=2,
-                                             hidden_size=lstm_hiddn_dim,
+                                             hidden_size=lstm_hidden_dim,
                                              num_layers=num_layers,
                                              bidirectional=bidir,
                                              batch_first=True,
@@ -747,7 +747,7 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
         lstm_out_acc, hid = self.node_hist_encoder_acc(acc)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
         lstm_out_vell, hid = self.node_hist_encoder_vel(vel)  # lstm_out shape num_peds, timestamps ,  2*hidden_dim
         lstm_out_poses, hid = self.node_hist_encoder_poses(poses)
-        lstm_out = lstm_out_vell  + lstm_out_poses + lstm_out_acc
+        lstm_out = lstm_out_vell + lstm_out_poses + lstm_out_acc
         # lstm_out = lstm_out_poses  # + lstm_out_poses
 
         current_pose = scene[:, -1, :2]  # num_people, data_dim
@@ -790,8 +790,9 @@ class LstmEncDeltaStackedFullPredMultyGaus(nn.Module):
             cov_matrix = m_diag  # + anti_diag
             gauses.append(gmm)
             a_t = gmm.sample()  # possible grad problems?
+            a_tt = F.dropout(self.action(a_t.reshape(bs, -1)), self.dropout_p)
             state = h_state
-            inp = F.dropout(torch.cat((catted.reshape(bs, -1), a_t), dim=-1), self.dropout_p)
+            inp = F.dropout(torch.cat((catted.reshape(bs, -1), a_tt), dim=-1), self.dropout_p)
 
         return gauses
 

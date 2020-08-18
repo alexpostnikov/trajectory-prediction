@@ -43,6 +43,9 @@ class Dataset_from_pkl(Dataset):
             with open(data_dict[file_name], 'rb') as f:
                 print("loading " + file_name)
                 self.data[file_name] = dill.load(f)
+                for i in range(len(self.data[file_name])):
+                    self.data[file_name][i] = torch.cat(self.data[file_name][i])
+
 
         self.dataset_indeces = {}
         self.data_length = 0
@@ -51,6 +54,86 @@ class Dataset_from_pkl(Dataset):
             for id, sub_dataset in enumerate(self.data[key]):
                 self.data_length += len(sub_dataset) - 20
                 self.dataset_indeces[self.data_length] = [key, id]
+
+
+    def find_next_data_by_index(self, index, dataset):
+
+        self_data = dataset[index]
+        data = []
+        data.append(self_data)
+
+        self_index = self_data[0].item()
+
+        c = 1
+        last_seen_timestamp = dataset[index][1].item()
+        while index + c < len(dataset):
+
+            if dataset[index + c][0].item() == self_index:
+                data.append(dataset[index + c])
+                last_seen_timestamp = dataset[index + c][1].item()
+
+            if dataset[index + c][1].item() - last_seen_timestamp > 1.0:
+                break
+            c += 1
+            if len(data) >= 20:
+                break
+        data = torch.stack(data)
+        extended = torch.zeros(20, 14)
+        extended[0:len(data)] = data
+        return extended, last_seen_timestamp
+
+    def get_neighbours_history(self, neighbours_indexes, start_index, end_index, data, start_timestamp):
+        n_history_tensor = torch.zeros(len(neighbours_indexes), 20, 14)
+        n_history = [torch.zeros(20, 14) for i in neighbours_indexes]
+        for i in range(end_index - start_index + 1):
+            person_id = data[start_index+i][0].item()
+            timestamp = int(data[start_index + i][1].item())
+            if person_id in neighbours_indexes:
+                delta_ts = timestamp - start_timestamp
+                n_history[neighbours_indexes.index(person_id)][delta_ts] = data[start_index + i]
+        if len(n_history) != 0:
+            n_history_tensor = torch.stack(n_history)
+        return n_history_tensor
+
+    def get_peds(self, index, dataset: List):
+        """
+        return stacked torch tensor of scene in specified timestamps from specified dataset.
+        if at any given timestamp person is not found at dataset, but later (previously) will appear,
+        that its tensor data is tensor of zeros.
+        :param start: timestamp start
+        :param end:  timestamp end
+        :param dataset: list of data. shapesa are: 1: timestamp 1: num_peds, 2: RFU, 3: data np.array of 8 floats
+        :return: torch tensor of shape : end-start, max_num_peds, , 20 , 8
+        """
+        self_data = dataset[index]
+        start = int(self_data[1].item())
+        self_index = self_data[0].item()
+
+        person_history, end = self.find_next_data_by_index(index, dataset)
+        # end = int(person_history[-1, 1].item())
+        neighbours_indexes = set()
+        counter = 0
+        start_index = index
+        end_index = index
+        while index - counter >= 0:
+            neighbours_indexes.add(dataset[index - counter][0].item())
+            start_index = index - counter
+            counter += 1
+            if dataset[index - counter][1] != start:
+                break
+
+        counter = 0
+        while dataset[index + counter][1] <= end:
+            neighbours_indexes.add(dataset[index + counter][0].item())
+            end_index = index + counter
+            counter += 1
+            if index + counter >= len(dataset):
+                break
+        pass
+        neighbours_indexes.remove(self_index)
+        neighbours_history = self.get_neighbours_history(list(neighbours_indexes), start_index, end_index, dataset, start)
+
+        return person_history, neighbours_history
 
     def get_ped_data_in_time(self, start: int, end: int, dataset: List):
         """
@@ -92,26 +175,26 @@ class Dataset_from_pkl(Dataset):
         :param dataset: list of data. shapes are: 0: timestamp 1: num_peds, 2: RFU, 3: data np.array of 8 floats
         :return: dict of  predestrians ids at each scene (one scene is 20 timestamps)
         """
-        indexes = {}
-        for time_start in range (start, end):
-            time_start_indexes = []
+        indexes = []
+        for time_start in range(start, end):
+
             for duration in range(0, 20):
                 peoples = dataset[time_start + duration]
-                time_start_indexes += list(self.get_peds_indexes_in_timestamp(peoples))
-            indexes[time_start] = list(set(time_start_indexes))
-        return indexes
+                indexes += list(self.get_peds_indexes_in_timestamp(peoples))
 
-    def get_peds_indexes_in_timestamp(self, timestamp_data: List):
+        return set(indexes)
+
+    def get_peds_indexes_in_timestamp(self, person: List):
         """
-        :param timestamp_data: list of data. shapes are: 0: num_peds, 2: RFU, 3: data np.array of 8 floats
+        :param person:
         :return: Set of  peds ids at scene
         """
         indexes = []
-        for person in timestamp_data:
-            if type(person) == torch.Tensor:
-                indexes.append(float(person[0]))
-            else:
-                indexes.append(float(person[0][0]))
+
+        if type(person) == torch.Tensor:
+            indexes.append(float(person[0]))
+        else:
+            indexes.append(float(person[0][0]))
         return set(indexes)
 
     def get_dataset_from_index(self, data_index: int):
@@ -131,42 +214,21 @@ class Dataset_from_pkl(Dataset):
         return self.data_length
 
     def __getitem__(self, index):
-        if type(index) == tuple:
-            num_samples = index[1]
-            index = index[0]
-        else:
-            num_samples = None
-        # print (index)
-        # print(num_samples)
+
         [file, sub_dataset], index_in_sub_dataset = self.get_dataset_from_index(index)
         self.packed_data = []  # num_samples * 20 * numped * 8
-        data = self.get_ped_data_in_time(index_in_sub_dataset, index_in_sub_dataset+1, self.data[file][sub_dataset])
-        # print(data.shape)
-        if num_samples is not None:
-            storage = {}
-            storage[0] = data
-            max_num_peds = data.shape[1]
-            if index+num_samples > self.data_length:
-                num_samples = self.data_length - index
-
-            for i in range(1, num_samples):
-
-                [file, sub_dataset], index_in_sub_dataset = self.get_dataset_from_index(index+i)
-                self.packed_data = []  # num_samples * 20 * numped * 8
-                storage[i] = self.get_ped_data_in_time(index_in_sub_dataset, index_in_sub_dataset + 1,
-                                                 self.data[file][sub_dataset])
-                if max_num_peds < storage[i].shape[1]:
-                    max_num_peds = storage[i].shape[1]
-
-            out = torch.zeros(num_samples, max_num_peds, 20, 14)
-            for i in range(num_samples):
-                out[i, 0:storage[i].shape[1], :, :] = storage[i]
-            data = out
-
-        else:
-            data = data[0]
+        data = self.get_peds(index_in_sub_dataset, self.data[file][sub_dataset])
         return data
 
+
+def my_fn(data):
+    node_hist = []
+    neighbours = []
+    for i in range(len(data)):
+        node_hist.append(data[i][0])
+        neighbours.append(data[i][1])
+    node_hist = torch.stack(node_hist)
+    return node_hist, neighbours
 
 def is_filled(data):
     return not (data[:, 1] == 0).any().item()
@@ -176,11 +238,12 @@ if __name__ == "__main__":
     dataset = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed_with_forces/", data_files=["eth_train.pkl", "zara2_test.pkl"])
     print(len(dataset))
     t = dataset[0]
-    print(dataset[0].shape)
-    print(dataset[0, 10].shape)
-    import time
+    print(dataset[0][0].shape)
 
-    training_generator = torch.utils.data.DataLoader(dataset, batch_size=1)
+    # training_set = Dataset_from_pkl("/home/robot/repos/trajectories_pred/processed/", data_files=["eth_train.pkl"])
+    training_generator = torch.utils.data.DataLoader(dataset, batch_size=512, collate_fn=my_fn)# , num_workers=10
+    #
+    import time
     start = time.time()
     for local_batch in training_generator:
         # print(local_batch[0].shape)
@@ -188,16 +251,13 @@ if __name__ == "__main__":
         pass
 
     print(time.time() - start)
-    # training_set = Dataset_from_pkl("/home/robot/repos/trajectories_pred/processed/", data_files=["eth_train.pkl"])
+        # print(local_batch[1].shape)
+        # for ped in range(local_batch.shape[1]):
+        #     observed_pose = local_batch[0, ped, 0:8, :]
+        #     if is_filled(observed_pose):
+        #         print("ped: ", ped, "observed_pose: ", observed_pose.shape)
+        #     else:
+        #         print("unfilled")
+        #         break
 
-    #
-    # for local_batch in training_generator:
-    #     print(local_batch.shape)
-    #     for ped in range(local_batch.shape[1]):
-    #         observed_pose = local_batch[0, ped, 0:8, :]
-    #         if is_filled(observed_pose):
-    #             print("ped: ", ped, "observed_pose: ", observed_pose.shape)
-    #         else:
-    #             print("unfilled")
-    #             break
 

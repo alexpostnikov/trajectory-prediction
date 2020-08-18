@@ -1,7 +1,7 @@
 import torch
 from dataloader import Dataset_from_pkl, is_filled
 from model import LSTMTagger, OneLayer, LSTM_single, LSTM_single_with_emb, LSTM_delta, LSTM_enc_delta, LSTM_enc_delta_wo_emb
-torch.manual_seed(1)
+
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,7 +19,7 @@ def plot_prob(gt, gmm, ped_num):
 
 counter = 0
 
-def plot_prob_big(gt, gmm, ped_num):
+def plot_prob_big(gt, gmm, ped_num, save=False):
     global counter
 
     x = torch.arange(torch.min(gt[8:, 0]) - 2, torch.max(gt[8:, 0]) + 2, 0.1)
@@ -48,10 +48,12 @@ def plot_prob_big(gt, gmm, ped_num):
     ax.plot(gt[:, 0].detach().cpu(), gt[:, 1].detach().cpu())
     ax.plot(gt[8:, 0].detach().cpu(), gt[8:, 1].detach().cpu(), 'ro')
     ax.imshow(prob.detach().numpy())
-    plt.savefig("./visualisations/traj_dirtr/"+str(counter)+".jpg", )
+    if save:
+        plt.savefig("./visualisations/traj_dirtr/"+str(counter)+".jpg", )
+        plt.close()
     counter += 1
-    plt.close()
-    pass
+
+    return ax
 
 
 def plot_prob_step(gt, gmm, ped_num, ax):
@@ -115,7 +117,7 @@ def plot_traj(data, ax=None, color="red"):
                 plt.show()
 
 
-def visualize(model, gen, limit=10e7, device="cuda") :
+def visualize(model, gen, limit=10e7, device="cuda"):
     for batch_id, local_batch in enumerate(gen):
         local_batch = local_batch.to(device)
         if local_batch.shape[1] < 1:
@@ -123,21 +125,20 @@ def visualize(model, gen, limit=10e7, device="cuda") :
         if batch_id > limit:
             # stop to next epoch
             break
-
-
         gt = local_batch.clone()
         # local_batch = local_batch[:, :, :8, 2:4].to(device)
-        local_batch[0, :, 8:, :] = torch.zeros_like(local_batch[0, :, 8:, :]).to(device)
+        # local_batch[0, :, 8:, :] = torch.zeros_like(local_batch[0, :, 8:, :]).to(device)
 
         num_peds = local_batch.shape[1]
         # predictions = torch.zeros(num_peds, 0, 2).requires_grad_(True).to(device)
-        prediction = model(local_batch[0, :, 0:8, 2:8])
+        prediction = model(local_batch[0, :, :, 2:8])
         predictions = torch.cat([prediction[i].mean for i in range(12)]).reshape(12, -1, 2).permute(1, 0, 2)
         for ped_num in range(num_peds):
             if is_filled(local_batch[0, ped_num, :8, :]):
 
                 if not torch.any(torch.norm(gt[0, ped_num, 8:, 2:4],dim=-1)==torch.tensor([0]).cuda()):
-                    plot_prob_big(gt[0, ped_num, :, 2:4], prediction, ped_num)
+                    ax = plot_prob_big(gt[0, ped_num, :, 2:4], prediction, ped_num)
+                    return ax
                     # plot_prob(gt[0, ped_num, :, 2:4], prediction, ped_num)
 
                 # fig = plt.figure()
@@ -158,6 +159,28 @@ def visualize(model, gen, limit=10e7, device="cuda") :
                 # plot_traj(local_batch[0, ped_num:ped_num + 1, :8, 2:4].detach().cpu(), ax2, color="blue")
                 # pass
                 # plt.show()
+
+
+def visualize_single(model, gen, device="cuda"):
+    for batch_id, local_batch in enumerate(gen):
+        local_batch = local_batch.to(device)
+        if local_batch.shape[1] < 1:
+            continue
+        gt = local_batch.clone()
+        # local_batch = local_batch[:, :, :8, 2:4].to(device)
+        # local_batch[0, :, 8:, :] = torch.zeros_like(local_batch[0, :, 8:, :]).to(device)
+
+        num_peds = local_batch.shape[1]
+        # predictions = torch.zeros(num_peds, 0, 2).requires_grad_(True).to(device)
+        prediction = model(local_batch[0, :, :, 2:8])
+        predictions = torch.cat([prediction[i].mean for i in range(12)]).reshape(12, -1, 2).permute(1, 0, 2)
+        for ped_num in range(num_peds):
+            if is_filled(local_batch[0, ped_num, :8, :]):
+
+                if not torch.any(torch.norm(gt[0, ped_num, 8:, 2:4],dim=-1) == torch.tensor([0]).cuda()):
+                    ax = plot_prob_big(gt[0, ped_num, :, 2:4], prediction, ped_num)
+                    return ax
+
 
 
 

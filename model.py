@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from torch.distributions.multivariate_normal import MultivariateNormal
 import torch.distributions as D
 
-torch.manual_seed(1)
 
 
 class LSTMTagger(nn.Module):

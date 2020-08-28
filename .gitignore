@@ -132,10 +132,12 @@ dmypy.json
 .idea/
 *.pkl
 tb/
+*.pt
 
 lstm_test.ipynb
 NHE_EE.ipynb
 train.ipynb
+notebooks/
 weights
 tb_good
 pack_padded.ipynb

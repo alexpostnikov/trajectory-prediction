@@ -3,7 +3,7 @@ import os
 import torch
 import dill
 from typing import Union, List
-
+from tqdm import tqdm
 
 class Dataset_from_pkl(Dataset):
     """
@@ -54,45 +54,71 @@ class Dataset_from_pkl(Dataset):
             for id, sub_dataset in enumerate(self.data[key]):
                 self.data_length += len(sub_dataset) - 20
                 self.dataset_indeces[self.data_length] = [key, id]
+        data_dim = sub_dataset.shape[-1]
 
+        self.processed_history = torch.zeros(self.data_length,20,data_dim)
+        self.processed_neighbors = [[] for _ in range(self.data_length)]
 
+        self.upper_bounds = list(self.dataset_indeces.keys())
+        self.upper_bounds.append(0)
+        self.upper_bounds.sort()
+
+    # TODO: optimize?
     def find_next_data_by_index(self, index, dataset):
 
         self_data = dataset[index]
         data = []
         data.append(self_data)
-
-        self_index = self_data[0].item()
-
-        c = 1
         last_seen_timestamp = dataset[index][1].item()
-        while index + c < len(dataset):
+        end_ts = last_seen_timestamp + 20
+        person_id = self_data[0].item()
+        self_index = self_data[0].item()
+        n_history_tensor = torch.zeros(20, 14)
+        history_data = dataset[
+            torch.where((dataset[:, 1] >= last_seen_timestamp) * (dataset[:, 1] < end_ts) * (dataset[:, 0] == person_id))]
+        last_seen_timestamp = history_data[-1, 1].item()
+        n_history_tensor[0:len(history_data), :] = history_data
+        # c = 1
+        #
+        # while index + c < len(dataset):
+        #
+        #     if dataset[index + c][0].item() == self_index:
+        #         data.append(dataset[index + c])
+        #         last_seen_timestamp = dataset[index + c][1].item()
+        #
+        #     if dataset[index + c][1].item() - last_seen_timestamp > 1.0:
+        #         break
+        #     c += 1
+        #     if len(data) >= 20:
+        #         break
+        # data = torch.stack(data)
+        # extended = torch.zeros(20, 14)
+        # extended[0:len(data)] = data
+        # print (torch.sum(n_history_tensor != extended))
+        return n_history_tensor, last_seen_timestamp
 
-            if dataset[index + c][0].item() == self_index:
-                data.append(dataset[index + c])
-                last_seen_timestamp = dataset[index + c][1].item()
-
-            if dataset[index + c][1].item() - last_seen_timestamp > 1.0:
-                break
-            c += 1
-            if len(data) >= 20:
-                break
-        data = torch.stack(data)
-        extended = torch.zeros(20, 14)
-        extended[0:len(data)] = data
-        return extended, last_seen_timestamp
 
     def get_neighbours_history(self, neighbours_indexes, start_index, end_index, data, start_timestamp):
-        n_history_tensor = torch.zeros(len(neighbours_indexes), 20, 14)
-        n_history = [torch.zeros(20, 14) for i in neighbours_indexes]
-        for i in range(end_index - start_index + 1):
-            person_id = data[start_index+i][0].item()
-            timestamp = int(data[start_index + i][1].item())
-            if person_id in neighbours_indexes:
-                delta_ts = timestamp - start_timestamp
-                n_history[neighbours_indexes.index(person_id)][delta_ts] = data[start_index + i]
-        if len(n_history) != 0:
-            n_history_tensor = torch.stack(n_history)
+        end_timestamp = start_timestamp + 8
+
+        # n_history_tensor_check = torch.zeros(len(neighbours_indexes), 8, 14)
+        n_history_tensor = torch.zeros(len(neighbours_indexes), 8, 14)
+        # n_history = [torch.zeros(8, 14) for i in neighbours_indexes]
+
+        for i, person_id in enumerate(neighbours_indexes):
+            neighbour = data[torch.where((data[:, 1] >= start_timestamp) * (data[:, 1] < end_timestamp) * (data[:, 0] == person_id))]
+            if len(neighbour) > 0:
+                num_missed_ts_from_start = int(neighbour[0, 1] - start_timestamp)
+                n_history_tensor[i][num_missed_ts_from_start:num_missed_ts_from_start+len(neighbour)] = neighbour
+        # for i in range(end_index - start_index + 1):
+        #     person_id = data[start_index+i][0].item()
+        #     timestamp = int(data[start_index + i][1].item())
+        #     if person_id in neighbours_indexes:
+        #         delta_ts = timestamp - start_timestamp
+        #         n_history[neighbours_indexes.index(person_id)][delta_ts] = data[start_index + i]
+        # if len(n_history) != 0:
+        #     n_history_tensor = torch.stack(n_history)
+        # print(torch.sum(n_history_tensor_check != n_history_tensor))
         return n_history_tensor
 
     def get_peds(self, index, dataset: List):
@@ -110,6 +136,7 @@ class Dataset_from_pkl(Dataset):
         self_index = self_data[0].item()
 
         person_history, end = self.find_next_data_by_index(index, dataset)
+        end = start + 8
         # end = int(person_history[-1, 1].item())
         neighbours_indexes = set()
         counter = 0
@@ -123,7 +150,7 @@ class Dataset_from_pkl(Dataset):
                 break
 
         counter = 0
-        while dataset[index + counter][1] <= end:
+        while dataset[index + counter][1] < end:
             neighbours_indexes.add(dataset[index + counter][0].item())
             end_index = index + counter
             counter += 1
@@ -213,20 +240,56 @@ class Dataset_from_pkl(Dataset):
     def __len__(self):
         return self.data_length
 
+    def load_from_preprocessed(self, file, sub_dataset, index_in_sub_dataset):
+
+        node_hist = torch.load("preprocessed/"
+                               + file[:file.index(".")] + str(sub_dataset) + ".pt")
+        neig_hist = torch.load("preprocessed/"
+                               + file[:file.index(".")] + str(sub_dataset) + "neighbors.pt")
+
+        for i, (dataset_name, dataset_index) in enumerate(self.dataset_indeces.values()):
+            if dataset_name == file and dataset_index == sub_dataset:
+                self.processed_history[self.upper_bounds[i]:self.upper_bounds[i + 1]] = node_hist
+                self.processed_neighbors[self.upper_bounds[i]:self.upper_bounds[i + 1]] = neig_hist
+        return [node_hist[index_in_sub_dataset], neig_hist[index_in_sub_dataset]]
+
     def __getitem__(self, index):
-
         [file, sub_dataset], index_in_sub_dataset = self.get_dataset_from_index(index)
-        self.packed_data = []  # num_samples * 20 * numped * 8
-        data = self.get_peds(index_in_sub_dataset, self.data[file][sub_dataset])
-        return data
 
+        if not torch.any(self.processed_history[index] != torch.zeros_like(self.processed_history[index])):
 
-def my_fn(data):
+            if os.path.isfile("preprocessed/"
+                              + file[:file.index(".")] + str(sub_dataset) + ".pt"):
+                data = self.load_from_preprocessed(file, sub_dataset, index_in_sub_dataset)
+                return data
+
+            self.packed_data = []  # num_samples * 20 * numped * 8
+            data = self.get_peds(index_in_sub_dataset, self.data[file][sub_dataset])
+            self.processed_history[index] = data[0]
+            self.processed_neighbors[index] = data[1]
+            return data
+        else:
+            data = [self.processed_history[index], self.processed_neighbors[index]]
+            return data
+
+    def save_preprocessed(self):
+        for i in tqdm(range(self.data_length)):
+            self.__getitem__(i)
+        upper_bounds = list(self.dataset_indeces.keys())
+        upper_bounds.append(0)
+        upper_bounds.sort()
+        for i, (dataset_name, index) in enumerate(self.dataset_indeces.values()):
+            torch.save(self.processed_history[upper_bounds[i]:upper_bounds[i+1]], "preprocessed/"
+                       + dataset_name[:dataset_name.index(".")]+str(index)+".pt")
+            torch.save(self.processed_neighbors[upper_bounds[i]:upper_bounds[i + 1]], "preprocessed/"
+                       + dataset_name[:dataset_name.index(".")] + str(index) + "neighbors.pt")
+
+def collate_fn(data):
     node_hist = []
     neighbours = []
     for i in range(len(data)):
         node_hist.append(data[i][0])
-        neighbours.append(data[i][1])
+        neighbours.append(data[i][1][:, :8, 2:8])
     node_hist = torch.stack(node_hist)
     return node_hist, neighbours
 
@@ -235,29 +298,34 @@ def is_filled(data):
 
 
 if __name__ == "__main__":
-    dataset = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed_with_forces/", data_files=["eth_train.pkl", "zara2_test.pkl"])
+    dataset = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed_with_forces/", data_files=["eth_train.pkl"]) # , "zara2_test.pkl"]
+    # dataset.save_preprocessed()
     print(len(dataset))
     t = dataset[0]
     print(dataset[0][0].shape)
 
     # training_set = Dataset_from_pkl("/home/robot/repos/trajectories_pred/processed/", data_files=["eth_train.pkl"])
-    training_generator = torch.utils.data.DataLoader(dataset, batch_size=512, collate_fn=my_fn)# , num_workers=10
+    training_generator = torch.utils.data.DataLoader(dataset, batch_size=512, collate_fn=collate_fn)# , num_workers=10
     #
     import time
     start = time.time()
-    for local_batch in training_generator:
+    for i, local_batch in enumerate(training_generator):
+        if i > 5:
+            break
+        print(i)
         # print(local_batch[0].shape)
         # print(local_batch[0][-1, 0, 1])
         pass
 
     print(time.time() - start)
-        # print(local_batch[1].shape)
-        # for ped in range(local_batch.shape[1]):
-        #     observed_pose = local_batch[0, ped, 0:8, :]
-        #     if is_filled(observed_pose):
-        #         print("ped: ", ped, "observed_pose: ", observed_pose.shape)
-        #     else:
-        #         print("unfilled")
-        #         break
 
+    start = time.time()
+    for i, local_batch in enumerate(training_generator):
+        if i > 5:
+            break
+        print(i)
+
+        pass
+
+    print(time.time() - start)
 

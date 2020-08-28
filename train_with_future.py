@@ -276,8 +276,8 @@ if __name__ == "__main__":
 
     print(device)
 
-    model = CvaeFuture(lstm_hidden_dim=64, num_layers=1, bidir=True, dropout_p=0.0, num_modes=30).to(device)
+    model = CvaeFuture(lstm_hidden_dim=32, num_layers=1, bidir=True, dropout_p=0.0, num_modes=30).to(device)
     # model = LstmEncDWithAtt(lstm_hidden_dim=64, num_layers=1,
     #                                              bidir=True, dropout_p=0.0, num_modes=30).to(device)
 
-    train_pose_vel(model, training_generator, test_generator, num_epochs=300, device=device, lr=0.0005, limit=600)
+    train_pose_vel(model, training_generator, test_generator, num_epochs=300, device=device, lr=0.0005, limit=1e600)

@@ -1,10 +1,15 @@
 import torch
-from dataloader import Dataset_from_pkl, is_filled
-from model import LSTMTagger, OneLayer, LSTM_single, LSTM_single_with_emb, LSTM_delta, LSTM_enc_delta, LSTM_enc_delta_wo_emb
+from dataloader_parallel import Dataset_from_pkl, collate_fn, is_filled
+from model_cvae_parallel import CvaeFuture
+
 
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
 import numpy as np
+import io
+import time
+
+import matplotlib.pyplot as plt
 
 
 def plot_prob(gt, gmm, ped_num):
@@ -19,18 +24,28 @@ def plot_prob(gt, gmm, ped_num):
 
 counter = 0
 
-def plot_prob_big(gt, gmm, ped_num, save=False):
+def plot_prob_big(gt, gmm, ped_num, save=False, device="cpu"):
     global counter
 
-    x = torch.arange(torch.min(gt[8:, 0]) - 2, torch.max(gt[8:, 0]) + 2, 0.1)
-    y = torch.arange(torch.min(gt[8:, 1]) - 2, torch.max(gt[8:, 1]) + 2, 0.1)
-    prob = torch.zeros_like(y[None].T * x)
+    x = torch.arange(torch.min(gt[8:, 0]) - 2, torch.max(gt[8:, 0]) + 2, 0.1).to(device)
+    y = torch.arange(torch.min(gt[8:, 1]) - 2, torch.max(gt[8:, 1]) + 2, 0.1).to(device)
+    # gmm = gmm.to(device)
+    gt = gt.to(device)
+    prob = torch.zeros_like(y[None].T * x).to(device)
     for t in range(12):
-        for i in range(len(x)):
-            if abs(x[i] - gt[8+t, 0]) < 3:
-                for j in range(len(y)):
-                    if abs(y[j] - gt[8 + t, 1]) < 3:
-                        prob[j][i] += torch.exp(gmm[t].log_prob(torch.tensor([x[i], y[j]]).cuda())[ped_num])
+        # for i in range(len(x)):
+        #     if abs(x[i] - gt[8+t, 0]) < 2:
+        #         for j in range(len(y)):
+        X1 = x.unsqueeze(0)
+        Y1 = y.unsqueeze(1)
+        X2 = X1.repeat(y.shape[0], 1)
+        Y2 = Y1.repeat(1, x.shape[0])
+        Z = torch.stack([X2, Y2]).permute(1, 2, 0)
+        Z = Z.reshape(-1, 2)
+        ll = gmm[t].log_prob(Z.unsqueeze(1))[:, ped_num]
+        prob += torch.exp(ll).reshape(y.shape[0], x.shape[0])
+                    # if abs(y[j] - gt[8 + t, 1]) < 2:
+                    #     prob[j][i] += torch.exp(gmm[t].log_prob(torch.tensor([x[i], y[j]]).cuda())[ped_num])
 
     prob = torch.clamp(prob, max=2)
 
@@ -46,8 +61,9 @@ def plot_prob_big(gt, gmm, ped_num, save=False):
     ax.set_yticklabels(
         np.round((((torch.linspace(0, len(x), 6)) * (torch.max(x) - torch.min(x)) / len(y) + torch.min(y)).numpy()), 1))
     ax.plot(gt[:, 0].detach().cpu(), gt[:, 1].detach().cpu())
+    ax.plot(gt[:, 0].detach().cpu(), gt[:, 1].detach().cpu(), "bo")
     ax.plot(gt[8:, 0].detach().cpu(), gt[8:, 1].detach().cpu(), 'ro')
-    ax.imshow(prob.detach().numpy())
+    ax.imshow(prob.detach().cpu().numpy())
     if save:
         plt.savefig("./visualisations/traj_dirtr/"+str(counter)+".jpg", )
         plt.close()
@@ -57,12 +73,12 @@ def plot_prob_big(gt, gmm, ped_num, save=False):
 
 
 def plot_prob_step(gt, gmm, ped_num, ax):
-        x = torch.arange(gt[0] - 2, gt[0] + 2, 0.1).cuda()
-        y = torch.arange(gt[1] - 2, gt[1] + 2, 0.1).cuda()
+        x = torch.arange(gt[0] - 2, gt[0] + 2, 0.1).to(gt.device)
+        y = torch.arange(gt[1] - 2, gt[1] + 2, 0.1).to(gt.device)
         prob = torch.zeros_like(x[None].T * y)
         for i in range(len(x)):
             for j in range(len(y)):
-                prob[i][j] = torch.exp(gmm.log_prob(torch.tensor([x[i], y[j]]).cuda())[ped_num])
+                prob[i][j] = torch.exp(gmm.log_prob(torch.tensor([x[i], y[j]]).to(gt.device))[ped_num])
         prob = prob.clamp(max=2)
         ax.imshow(prob.detach().cpu())
 
@@ -136,8 +152,8 @@ def visualize(model, gen, limit=10e7, device="cuda"):
         for ped_num in range(num_peds):
             if is_filled(local_batch[0, ped_num, :8, :]):
 
-                if not torch.any(torch.norm(gt[0, ped_num, 8:, 2:4],dim=-1)==torch.tensor([0]).cuda()):
-                    ax = plot_prob_big(gt[0, ped_num, :, 2:4], prediction, ped_num)
+                if not torch.any(torch.norm(gt[0, ped_num, 8:, 2:4],dim=-1)==torch.tensor([0]).to(device)):
+                    ax = plot_prob_big(gt[0, ped_num, :, 2:4], prediction, ped_num, device=device)
                     return ax
                     # plot_prob(gt[0, ped_num, :, 2:4], prediction, ped_num)
 
@@ -177,28 +193,58 @@ def visualize_single(model, gen, device="cuda"):
         for ped_num in range(num_peds):
             if is_filled(local_batch[0, ped_num, :8, :]):
 
-                if not torch.any(torch.norm(gt[0, ped_num, 8:, 2:4],dim=-1) == torch.tensor([0]).cuda()):
-                    ax = plot_prob_big(gt[0, ped_num, :, 2:4], prediction, ped_num)
+                if not torch.any(torch.norm(gt[0, ped_num, 8:, 2:4],dim=-1) == torch.tensor([0]).to(device)):
+                    ax = plot_prob_big(gt[0, ped_num, :, 2:4], prediction, ped_num, device=device)
                     return ax
 
 
 
 
+def visualize_single_parallel(model, gen, device="cpu"):
+    for batch_id, local_batch in enumerate(gen):
+
+        x, neighbours = local_batch
+        x = x.to(device)
+        gt = x.clone()
+        model.to(device)
+        model.zero_grad()
+
+        x = x[:, :, 2:8]
+        prediction = model(x[:, :, 0:6], neighbours, train=False)
+        gt_prob = torch.cat(([prediction[i].log_prob(gt[:, 8 + i, 2:4]) for i in range(12)])).reshape(-1, 12)
+        num_peds = x.shape[0]
+        # predictions = torch.cat([prediction[i].mean for i in range(12)]).reshape(12, -1, 2).permute(1, 0, 2)
+        for ped_num in range(num_peds):
+            if is_filled(x[ped_num, :8, :]):
+
+                if not torch.any(torch.norm(gt[ped_num, 8:, 2:4], dim=-1) == torch.tensor([0]).to(device)):
+                    ax = plot_prob_big(gt[ped_num, :, 2:4], prediction, ped_num, device=device)
+                    return ax
+
+
+
 if __name__ == "__main__":
 
-    from tb_good.best.model import  LstmEncDeltaStackedFullPredMultyGaus
+    training_set = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed_with_forces/",
+                                    data_files=["eth_train.pkl"])
+    training_generator = torch.utils.data.DataLoader(training_set, batch_size=2, collate_fn=collate_fn, shuffle=True)
 
-
-    dataset = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed/", data_files=["eth_test.pkl"])
-    generator = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
+    test_set = Dataset_from_pkl("/home/robot/repos/trajectory-prediction/processed_with_forces/",
+                                data_files=["eth_test.pkl"])
+    test_generator = torch.utils.data.DataLoader(test_set, batch_size=12, shuffle=True, collate_fn=collate_fn)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
     print(device)
-    model = LstmEncDeltaStackedFullPredMultyGaus(lstm_hidden_dim=64, num_layers=1,
-                                                 bidir=True, dropout_p=0.0, num_modes=30).to(device)
+    model = CvaeFuture(lstm_hidden_dim=64, num_layers=1, bidir=True, dropout_p=0.0, num_modes=30).to(device)
+    model.load_state_dict(torch.load(
+        "/home/robot/repos/trajectory-prediction/tb/CvaeFuture_parallel_no_ent0.005_hd_64_ed_0_nl_1@21.08.2020-15:43:15/model.pth"))
 
-    # model = LSTM_enc_delta(10, 10, 2, 10).to(device)
-    path = "/home/robot/repos/trajectory-prediction/tb_good/best/LstmEncDeltaStackedFullPredMultyGaus0.001_hd_64_ed_0_nl_1@21.07.2020-14:20:33+best.pth"
-    model.load_state_dict(torch.load(path))
-    # model = torch.load()
 
-    visualize(model, generator)
+    start = time.time()
+    for i in range(2):
+        ax = visualize_single_parallel(model, test_generator)
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        buf.seek(0)
+
+    print(time.time() - start)
